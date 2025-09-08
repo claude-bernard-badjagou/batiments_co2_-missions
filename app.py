@@ -2,10 +2,17 @@
 Application Streamlit : Prédicteur de CO₂ pour bâtiments (monofichier, Streamlit Cloud)
 -----------------------------------------------------------------------------
 
-Correctifs intégrés :
+Correctifs intégrés (version finale) :
 - Champ max_depth : min_value=0 (0 = None), valeur par défaut = 1 (évite le crash).
-- Remplacement de tous les use_container_width=True par width="stretch".
+- Remplacement des use_container_width=True par width="stretch" pour st.dataframe.
 - RMSE calculée comme sqrt(MSE) (au lieu de squared=False).
+- Nuage de points : passage à Altair avec sécurisation des noms de colonnes et encodage explicite (quantitative).
+- Variables/fonctions en français (sans accents), commentaires explicatifs.
+
+Ressources partagées attendues à la racine :
+- Données : df_resultat_analyse_batiments.csv (facultatif : upload possible dans l'UI)
+- Modèle : model_co2.pkl (sera créé si absent)
+- Scaler : scaler_co2.pkl (sera créé si absent)
 """
 
 # 1) --- Importations ---
@@ -15,6 +22,7 @@ import joblib                               # Chargeons joblib pour sérialiser/
 import numpy as np                          # Chargeons numpy pour les tableaux et calculs numériques
 import pandas as pd                         # Chargeons pandas pour charger et manipuler les données tabulaires
 import streamlit as st                      # Chargeons Streamlit pour construire l'interface web
+import altair as alt                        # Chargeons Altair pour tracer des graphiques robustes
 from typing import Tuple, Optional, List    # Chargeons des types pour annoter proprement nos fonctions
 
 # scikit-learn : prétraitement, modèle, métriques
@@ -49,6 +57,7 @@ st.set_page_config(                           # Configurons la page (large), tit
 def charger_donnees(chemin: Optional[str] = None,
                     fichier_televerse: Optional[io.BytesIO] = None) -> Optional[pd.DataFrame]:
     """Chargeons le CSV : d'abord l'upload utilisateur, sinon le fichier local par défaut."""
+    # Si l'utilisateur a téléversé un fichier via l'interface, nous l'utilisons en priorité
     if fichier_televerse is not None:
         try:
             df = pd.read_csv(fichier_televerse)     # Lisons le CSV téléversé
@@ -57,6 +66,7 @@ def charger_donnees(chemin: Optional[str] = None,
             st.error(f"Erreur de lecture du CSV téléversé : {e}")
             return None
 
+    # Sinon, tentons de lire depuis le chemin fourni ou celui par défaut
     chemin_effectif = chemin or CHEMIN_DONNEES_PAR_DEFAUT
     if os.path.exists(chemin_effectif):
         try:
@@ -135,7 +145,7 @@ def charger_ou_entrainer_modele(df: Optional[pd.DataFrame],
     # 7) Évaluation (R², RMSE robuste)
     pred_test = modele.predict(X_test_s)             # Prédictions de test
     r2 = r2_score(y_test, pred_test)                 # R²
-    mse = mean_squared_error(y_test, pred_test)      # MSE sans arg nommé (robuste)
+    mse = mean_squared_error(y_test, pred_test)      # MSE (sans arg nommé)
     rmse = float(np.sqrt(mse))                       # RMSE via racine carrée
 
     # 8) Sauvegarde des artefacts
@@ -174,17 +184,19 @@ df_global = charger_donnees(CHEMIN_DONNEES_PAR_DEFAUT, fichier_csv_televerse)
 
 # 9) --- Accueil ---
 with onglet_accueil:
-    st.markdown("""
-    # 🌍 Prédicteur de CO₂ des bâtiments
+    st.markdown(
+        """
+        # 🌍 Prédicteur de CO₂ des bâtiments
 
-    **But** : estimer rapidement et de manière fiable les **émissions de CO₂** d'un bâtiment
-    à partir de variables simples (électricité, gaz, âge, proportion de surface principale).
+        **But** : estimer rapidement et de manière fiable les **émissions de CO₂** d'un bâtiment
+        à partir de variables simples (électricité, gaz, âge, proportion de surface principale).
 
-    **Ressources partagées** :
-    - Données : `df_resultat_analyse_batiments.csv`
-    - Modèle : `model_co2.pkl`
-    - Scaler : `scaler_co2.pkl`
-    """)
+        **Ressources partagées** :
+        - Données : `df_resultat_analyse_batiments.csv`
+        - Modèle : `model_co2.pkl`
+        - Scaler : `scaler_co2.pkl`
+        """
+    )
     if df_global is None:
         st.info("Aucune donnée locale détectée. Téléversez le CSV dans la barre latérale ou placez-le à la racine.")
     else:
@@ -197,14 +209,14 @@ with onglet_exploration:
         st.warning("Exploration indisponible : aucune donnée chargée.")
     else:
         st.markdown("### Aperçu")
-        st.dataframe(df_global.head(20), width="stretch")                     # ← width='stretch'
+        st.dataframe(df_global.head(20), width="stretch")                     # width='stretch'
 
         st.markdown("### Statistiques descriptives (numériques)")
-        st.dataframe(df_global.describe(include="number"), width="stretch")   # ← width='stretch'
+        st.dataframe(df_global.describe(include="number"), width="stretch")   # width='stretch'
 
         st.markdown("### Valeurs manquantes par colonne")
         manquants = df_global.isna().sum().sort_values(ascending=False)
-        st.dataframe(manquants.to_frame("nb_nan"), width="stretch")           # ← width='stretch'
+        st.dataframe(manquants.to_frame("nb_nan"), width="stretch")           # width='stretch'
 
         colonnes_numeriques = df_global.select_dtypes(include="number").columns.tolist()
         if colonnes_numeriques:
@@ -227,10 +239,35 @@ with onglet_exploration:
             with c2:
                 st.markdown("#### Nuage de points (x vs y)")
                 if len(colonnes_numeriques) >= 2:
+                    # 1) Sélection des colonnes
                     x_col = st.selectbox("Axe X", colonnes_numeriques, index=0)
                     y_col = st.selectbox("Axe Y", colonnes_numeriques, index=1)
                     try:
-                        st.scatter_chart(df_global[[x_col, y_col]].dropna(), x=x_col, y=y_col)
+                        # 2) Sous-dataframe propre (dropna et forçage numérique)
+                        df_xy = df_global[[x_col, y_col]].copy()
+                        df_xy = df_xy.apply(pd.to_numeric, errors="coerce").dropna()
+
+                        # 3) Sécurisation des noms (strip et remplacement des ':')
+                        def _secure(name: str) -> str:
+                            name_stripped = str(name).strip()
+                            return name_stripped.replace(":", "_")
+                        x_safe = _secure(x_col)
+                        y_safe = _secure(y_col)
+                        if x_safe != x_col or y_safe != y_col:
+                            df_xy = df_xy.rename(columns={x_col: x_safe, y_col: y_safe})
+
+                        # 4) Chart Altair explicite (quantitative)
+                        chart = (
+                            alt.Chart(df_xy)
+                            .mark_point()
+                            .encode(
+                                x=alt.X(x_safe, type="quantitative"),
+                                y=alt.Y(y_safe, type="quantitative"),
+                                tooltip=[x_safe, y_safe]
+                            )
+                            .interactive()
+                        )
+                        st.altair_chart(chart, use_container_width=True)
                     except Exception as e:
                         st.error(f"Erreur nuage de points : {e}")
                 else:
@@ -240,7 +277,7 @@ with onglet_exploration:
             st.markdown("### Matrice de corrélation (numérique)")
             try:
                 corr = df_global[colonnes_numeriques].corr()
-                st.dataframe(corr, width="stretch")                           # ← width='stretch'
+                st.dataframe(corr, width="stretch")                           # width='stretch'
             except Exception as e:
                 st.error(f"Erreur corrélation : {e}")
 
@@ -343,18 +380,20 @@ with onglet_prediction:
 # 13) --- API & Export ---
 with onglet_api:
     st.markdown("## 📡 API & Export des artefacts")
-    st.markdown("""
-    ### Point d'API prévu (service séparé FastAPI)
-    POST `/predict` avec :
-    {
-      "electricity": 5000.0,
-      "gas": 1000.0,
-      "age": 30.0,
-      "prop_gfa": 0.6
-    }
-    Réponse :
-    { "prediction_CO2": 123.45 }
-    """)
+    st.markdown(
+        """
+        ### Point d'API prévu (service séparé FastAPI)
+        POST `/predict` avec :
+        {
+          "electricity": 5000.0,
+          "gas": 1000.0,
+          "age": 30.0,
+          "prop_gfa": 0.6
+        }
+        Réponse :
+        { "prediction_CO2": 123.45 }
+        """
+    )
 
     st.markdown("### Téléchargement des artefacts")
     col_a, col_b = st.columns(2)
@@ -379,10 +418,12 @@ with onglet_api:
         else:
             st.info("Aucun scaler trouvé à télécharger.")
 
-    st.markdown("""
-    ---
-    **Bonnes pratiques** :
-    - Conservez les **mêmes colonnes** et le **même ordre** qu'à l'entraînement lors de la prédiction.
-    - Appliquez **le même scaler** (StandardScaler) appris sur les données d'entraînement.
-    - Réentraînez périodiquement si vos données réelles évoluent.
-    """)
+    st.markdown(
+        """
+        ---
+        **Bonnes pratiques** :
+        - Conservez les **mêmes colonnes** et le **même ordre** qu'à l'entraînement lors de la prédiction.
+        - Appliquez **le même scaler** (StandardScaler) appris sur les données d'entraînement.
+        - Réentraînez périodiquement si vos données réelles évoluent.
+        """
+    )

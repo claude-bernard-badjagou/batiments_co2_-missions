@@ -1,3 +1,4 @@
+
 # Application Streamlit : Prédicteur de CO₂ pour bâtiments (version monofichier)
 
 # 1) --- Importations ---
@@ -222,14 +223,14 @@ with onglet_exploration:
     else:
         # Affichons un aperçu et des infos générales
         st.markdown("### Aperçu du jeu de données")
-        st.dataframe(df_global.head(20), use_container_width=True)  # Affichons les 20 premières lignes pour inspecter la structure
+        st.dataframe(df_global.head(20), width='stretch')  # Affichons les 20 premières lignes pour inspecter la structure
 
         st.markdown("### Statistiques descriptives (numériques)")
-        st.dataframe(df_global.describe(include='number'), use_container_width=True)  # Résumons les colonnes numériques
+        st.dataframe(df_global.describe(include='number'), width='stretch')  # Résumons les colonnes numériques
 
         st.markdown("### Valeurs manquantes par colonne")
         manquants = df_global.isna().sum().sort_values(ascending=False)  # Comptons les NaN pour chaque colonne
-        st.dataframe(manquants.to_frame("nb_nan"), use_container_width=True)        # Affichons sous forme de tableau
+        st.dataframe(manquants.to_frame("nb_nan"), width='stretch')        # Affichons sous forme de tableau
 
         # Choix de colonnes numériques pour des graphiques rapides
         colonnes_numeriques = df_global.select_dtypes(include='number').columns.tolist()  # Récupérons les colonnes numériques disponibles
@@ -268,7 +269,7 @@ with onglet_exploration:
             st.markdown("### Matrice de corrélation (numérique)")
             try:
                 corr = df_global[colonnes_numeriques].corr()  # Calculons les corrélations linéaires entre variables numériques
-                st.dataframe(corr, use_container_width=True)  # Affichons la matrice pour inspection
+                st.dataframe(corr, width='stretch')  # Affichons la matrice pour inspection
             except Exception as e:
                 st.error(f"Erreur corrélation : {e}")
 
@@ -300,7 +301,7 @@ with onglet_modele:
         with c1:
             n_est = st.number_input("n_estimators (arbres)", min_value=50, max_value=1000, value=300, step=50)
         with c2:
-            profondeur_max = st.number_input("max_depth (None = automatique)", min_value=1, max_value=100, value=0, step=1)
+            profondeur_max = st.number_input("max_depth (None = automatique)", min_value=0, max_value=100, value=0, step=1, help="0 = None (illimité)")
             profondeur_max = None if profondeur_max == 0 else int(profondeur_max)
         with c3:
             graine = st.number_input("random_state", min_value=0, max_value=10_000, value=42, step=1)
